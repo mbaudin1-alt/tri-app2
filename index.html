@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Contrôle tri sélectif</title>
+<meta name="theme-color" content="#1C2321" />
+<meta name="description" content="Contrôle du tri sélectif par magasin, bâtiment, étage et type de déchet." />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="icon" href="icons/icon-192.png" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #F4F2EC;
+    color: #1C2321;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    background: #1C2321;
+    color: #F4F2EC;
+    padding: max(20px, env(safe-area-inset-top)) 18px 16px;
+  }
+  header p.eyebrow {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: #8FA79A;
+    margin: 0;
+    text-transform: uppercase;
+  }
+  header h1 { font-size: 20px; font-weight: 600; margin: 4px 0 0; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 16px 60px; }
+  button { font-family: inherit; }
+  .tab, .subtab, .chip, .status-btn {
+    border-radius: 10px;
+    border: 1px solid #DAD6CB;
+    background: #FFFFFF;
+    cursor: pointer;
+  }
+  .tab { flex: 1; min-width: 0; text-align: left; padding: 12px; }
+  .tab.active { border: 1.5px solid #1C2321; background: #F0EEE6; }
+  .subtab { padding: 9px 14px; font-size: 12px; font-weight: 600; }
+  .subtab.active { border: 1.5px solid #1C2321; background: #F0EEE6; }
+  .chip { flex: 0 0 auto; padding: 10px 14px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .chip.active { border: 1.5px solid #1C2321; background: #F0EEE6; }
+  .status-btn { display: flex; align-items: center; gap: 6px; padding: 9px 12px; font-size: 13px; font-weight: 500; color: #5A574E; }
+  .status-btn.sel-bien { border: 1.5px solid #3C7A5A; background: #E9F2ED; color: #3C7A5A; }
+  .status-btn.sel-mal { border: 1.5px solid #B5453C; background: #FBEBE9; color: #B5453C; }
+  .status-btn.sel-na { border: 1.5px solid #8A8479; background: #F0EEE8; color: #5A574E; }
+  #root { padding-top: 4px; }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .login-card { background: #FFFFFF; border: 1px solid #E4E1D8; border-radius: 12px; padding: 28px 24px; width: 100%; max-width: 340px; }
+  .login-card input {
+    width: 100%; padding: 11px 12px; margin-bottom: 10px; border-radius: 8px;
+    border: 1px solid #DAD6CB; font-size: 14px; background: #F9F8F4;
+  }
+  .login-card button {
+    width: 100%; padding: 11px; border-radius: 8px; border: none;
+    background: #1C2321; color: #F4F2EC; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 4px;
+  }
+  .login-error { color: #B5453C; font-size: 12px; margin: 0 0 10px; min-height: 14px; }
+</style>
+</head>
+<body>
+<h1 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">Application de contrôle du tri sélectif</h1>
+
+<div id="app"></div>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
+
+<script>
+const WASTE_TYPES = [
+  { id: "cartons", label: "Rolls cartons" },
+  { id: "papier", label: "Snapsac papier" },
+  { id: "plastique", label: "Snapsac plastique" },
+  { id: "dib", label: "DIB" },
+  { id: "verre", label: "Poubelle à verre" },
+  { id: "biodechet", label: "Biodéchets" }
+];
+
+function buildFloors(min, max) {
+  const f = [];
+  for (let i = max; i >= min; i--) f.push(i);
+  return f;
+}
+
+const BUILDINGS = {
+  antin: { id: "antin", name: "Antin", floors: buildFloors(-3, 8) },
+  provence: { id: "provence", name: "Provence", floors: buildFloors(-3, 9) },
+  homme: { id: "homme", name: "Homme", floors: buildFloors(-4, 4) },
+  gourmet: { id: "gourmet", name: "Gourmet", floors: buildFloors(-2, 4) },
+  dutyfree: { id: "dutyfree", name: "Duty free", floors: buildFloors(-2, 1) }
+};
+
+const STORES = [
+  { id: "coupole", name: "Coupole", buildingIds: ["antin", "provence"] },
+  { id: "homme", name: "Homme", buildingIds: ["homme"] },
+  { id: "gourmet", name: "Gourmet", buildingIds: ["gourmet"] },
+  { id: "dutyfree", name: "Duty free", buildingIds: ["dutyfree"] }
+];
+
+// ── Configuration des utilisateurs ──────────────────────────────────────
+// Option A (sans code) : colle ici l'URL CSV d'un Google Sheet publié
+// (voir le guide fourni). Laisse vide pour utiliser uniquement la liste
+// codée en dur ci-dessous.
+const USERS_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRABpGKNEDupnTgNtKsE0SnDooztVHZ1m05NqOxfQ4gha1tRiS7HXBWvDBhBa2yPIFa_W7bs9yqRNKi/pub?output=csv";
+
+// ── Envoi des validations vers Google Sheet ─────────────────────────────
+// Colle ici l'URL de déploiement de ton Google Apps Script Web App (voir
+// le guide fourni). Tant qu'elle est vide, le bouton "Valider" affichera
+// un message d'erreur au lieu d'envoyer les données.
+const GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxHUH7K1MjN0_GV6YoVSs9g0M25MsIOKYr6Yjr5gBhUl9RgX70rit68gBGrVXMKBjEr/exec";
+
+// Option B (avec code) : modifie directement cette liste, puis recommit
+// sur GitHub. Sert aussi de secours si l'URL ci-dessus est vide ou
+// injoignable.
+const DEFAULT_USERS = [
+  { login: "admin", password: "admin2026", name: "Responsable", buildings: ["antin", "provence", "homme", "gourmet", "dutyfree"] },
+  { login: "antin", password: "antin2026", name: "Agent Antin", buildings: ["antin"] },
+  { login: "provence", password: "provence2026", name: "Agent Provence", buildings: ["provence"] },
+  { login: "homme", password: "homme2026", name: "Agent Homme", buildings: ["homme"] },
+  { login: "gourmet", password: "gourmet2026", name: "Agent Gourmet", buildings: ["gourmet"] },
+  { login: "dutyfree", password: "dutyfree2026", name: "Agent Duty free", buildings: ["dutyfree"] }
+];
+
+function parseUsersCsv(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const rows = lines.slice(1);
+  const users = [];
+  rows.forEach(line => {
+    if (!line.trim()) return;
+    const cols = line.split(",");
+    if (cols.length < 4) return;
+    const login = cols[0].trim();
+    const password = cols[1].trim();
+    const name = cols[2].trim();
+    const buildings = cols[3].trim().split("|").map(s => s.trim()).filter(Boolean);
+    if (login && password && buildings.length) users.push({ login, password, name: name || login, buildings });
+  });
+  return users;
+}
+
+function floorLabel(f) {
+  if (f === 0) return "RDC";
+  if (f > 0) return "Étage " + f;
+  return "Sous-sol " + Math.abs(f);
+}
+
+const STATUS = {
+  bien: { label: "Bien trié", cls: "sel-bien", icon: "✓" },
+  mal: { label: "Mal trié", cls: "sel-mal", icon: "✕" },
+  na: { label: "Non applicable", cls: "sel-na", icon: "–" }
+};
+
+function key(b, f, w) { return b + "__" + f + "__" + w; }
+
+const STORAGE_KEY = "tri-selectif-records-v1";
+const USER_KEY = "tri-selectif-user-v1";
+
+function loadRecords() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function saveRecords() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.records)); } catch (e) {}
+}
+function loadUser() {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function saveUser(u) {
+  try { localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch (e) {}
+}
+function clearUser() {
+  try { localStorage.removeItem(USER_KEY); } catch (e) {}
+}
+
+const VALIDATIONS_KEY = "tri-selectif-validations-v1";
+function loadValidations() {
+  try {
+    const raw = localStorage.getItem(VALIDATIONS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function saveValidations() {
+  try { localStorage.setItem(VALIDATIONS_KEY, JSON.stringify(state.validations)); } catch (e) {}
+}
+
+let state = { user: loadUser(), storeId: null, buildingId: null, floor: null, records: loadRecords(), loginError: "", users: DEFAULT_USERS, usersLoaded: false, validations: loadValidations(), submitting: false, submitMsg: "" };
+
+function loadUsers() {
+  if (!USERS_SHEET_CSV_URL) { state.usersLoaded = true; render(); return; }
+  fetch(USERS_SHEET_CSV_URL)
+    .then(r => r.text())
+    .then(text => {
+      const parsed = parseUsersCsv(text);
+      if (parsed.length) state.users = parsed;
+    })
+    .catch(() => {})
+    .finally(() => { state.usersLoaded = true; render(); });
+}
+
+function visibleStoresForUser(user) {
+  return STORES
+    .map(s => ({ ...s, buildingIds: s.buildingIds.filter(bid => user.buildings.indexOf(bid) !== -1) }))
+    .filter(s => s.buildingIds.length > 0);
+}
+
+function initAfterLogin() {
+  const stores = visibleStoresForUser(state.user);
+  if (stores.length === 0) return;
+  state.storeId = stores[0].id;
+  state.buildingId = stores[0].buildingIds[0];
+  state.floor = BUILDINGS[state.buildingId].floors[0];
+}
+
+if (state.user) initAfterLogin();
+
+function attemptLogin(login, password) {
+  const match = state.users.find(u => u.login.toLowerCase() === login.trim().toLowerCase() && u.password === password);
+  if (!match) {
+    state.loginError = "Identifiant ou mot de passe incorrect.";
+    render();
+    return;
+  }
+  state.user = match;
+  state.loginError = "";
+  saveUser(match);
+  initAfterLogin();
+  render();
+}
+
+function logout() {
+  clearUser();
+  state.user = null;
+  state.storeId = null;
+  state.buildingId = null;
+  state.floor = null;
+  render();
+}
+
+function floorSummary(buildingId, f) {
+  let done = 0, missingPhoto = false;
+  WASTE_TYPES.forEach(w => {
+    const rec = state.records[key(buildingId, f, w.id)];
+    if (rec && rec.status) done++;
+    if (rec && rec.status === "mal" && !rec.photo) missingPhoto = true;
+  });
+  return { done, total: WASTE_TYPES.length, missingPhoto };
+}
+
+function buildingSummary(b) {
+  let done = 0, total = 0;
+  b.floors.forEach(f => {
+    WASTE_TYPES.forEach(w => {
+      total++;
+      const rec = state.records[key(b.id, f, w.id)];
+      if (rec && rec.status) done++;
+    });
+  });
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+function storeSummary(store) {
+  let done = 0, total = 0;
+  store.buildingIds.forEach(bid => {
+    const s = buildingSummary(BUILDINGS[bid]);
+    done += s.done;
+    total += s.total;
+  });
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+function setStatus(k, status) {
+  const prev = state.records[k];
+  if (status === "mal") {
+    state.records[k] = { status, photo: prev && prev.photo ? prev.photo : null };
+  } else {
+    state.records[k] = { status, photo: null };
+  }
+  saveRecords();
+  render();
+}
+
+function triggerPhoto(k) {
+  pendingKey = k;
+  document.getElementById("photoInput").click();
+}
+let pendingKey = null;
+
+document.getElementById("photoInput").addEventListener("change", function (e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file || !pendingKey) return;
+  const reader = new FileReader();
+  reader.onload = function () {
+    state.records[pendingKey] = { status: "mal", photo: reader.result };
+    saveRecords();
+    render();
+  };
+  reader.readAsDataURL(file);
+  e.target.value = "";
+});
+
+function floorKey(buildingId, f) { return buildingId + "__" + f; }
+
+// Complète automatiquement en "Non applicable" les types de déchets non
+// renseignés sur le palier, et bloque la validation si un "Mal trié" n'a
+// ni photo ni statut réévalué en "Non applicable".
+function validateFloor(buildingId, f) {
+  let blocked = [];
+  WASTE_TYPES.forEach(w => {
+    const k = key(buildingId, f, w.id);
+    let rec = state.records[k];
+    if (!rec || !rec.status) {
+      rec = { status: "na", photo: null };
+      state.records[k] = rec;
+    }
+    if (rec.status === "mal" && !rec.photo) blocked.push(w.label);
+  });
+  saveRecords();
+
+  if (blocked.length) {
+    state.submitMsg = "Photo requise (ou passer en \"Non applicable\") pour : " + blocked.join(", ");
+    render();
+    return;
+  }
+
+  submitFloorToSheet(buildingId, f);
+}
+
+function submitFloorToSheet(buildingId, f) {
+  if (!GOOGLE_SHEET_WEBHOOK_URL) {
+    state.submitMsg = "Aucune URL Google Sheet configurée (GOOGLE_SHEET_WEBHOOK_URL).";
+    render();
+    return;
+  }
+
+  const building = BUILDINGS[buildingId];
+  const store = STORES.find(s => s.buildingIds.indexOf(buildingId) !== -1);
+
+  const items = WASTE_TYPES.map(w => {
+    const rec = state.records[key(buildingId, f, w.id)];
+    return {
+      dechet: w.label,
+      statut: STATUS[rec.status].label,
+      photoJointe: rec.photo ? "Oui" : "Non",
+      photoData: rec.photo || ""
+    };
+  });
+
+  const payload = {
+    horodatage: new Date().toISOString(),
+    agent: state.user.name,
+    identifiant: state.user.login,
+    magasin: store ? store.name : "",
+    batiment: building.name,
+    etage: floorLabel(f),
+    items: items
+  };
+
+  state.submitting = true;
+  state.submitMsg = "Envoi en cours…";
+  render();
+
+  fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload)
+  })
+    .then(() => {
+      state.validations[floorKey(buildingId, f)] = payload.horodatage;
+      saveValidations();
+      state.submitMsg = "Palier validé et envoyé ✓";
+    })
+    .catch(() => {
+      state.submitMsg = "Échec de l'envoi. Vérifie la connexion.";
+    })
+    .finally(() => {
+      state.submitting = false;
+      render();
+    });
+}
+
+function renderLogin() {
+  document.getElementById("app").innerHTML =
+    '<div class="login-wrap"><div class="login-card">' +
+    '<p style="font-family:ui-monospace,monospace;font-size:11px;letter-spacing:1.5px;color:#8A8479;text-transform:uppercase;margin:0 0 4px">Contrôle terrain</p>' +
+    '<h1 style="font-size:18px;font-weight:600;margin:0 0 18px">Connexion</h1>' +
+    '<p class="login-error">' + (state.loginError || "") + '</p>' +
+    '<input id="loginInput" type="text" placeholder="Identifiant" autocomplete="username" />' +
+    '<input id="passInput" type="password" placeholder="Mot de passe" autocomplete="current-password" />' +
+    '<button id="loginBtn">Se connecter</button>' +
+    '</div></div>';
+
+  const doLogin = () => {
+    attemptLogin(document.getElementById("loginInput").value, document.getElementById("passInput").value);
+  };
+  document.getElementById("loginBtn").addEventListener("click", doLogin);
+  document.getElementById("passInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+}
+
+function render() {
+  if (!state.usersLoaded) {
+    document.getElementById("app").innerHTML = '<div class="login-wrap"><p style="color:#8A8479;font-size:13px">Chargement…</p></div>';
+    return;
+  }
+  if (!state.user) { renderLogin(); return; }
+
+  const stores = visibleStoresForUser(state.user);
+  let store = stores.find(s => s.id === state.storeId);
+  if (!store) { store = stores[0]; state.storeId = store.id; state.buildingId = store.buildingIds[0]; state.floor = BUILDINGS[state.buildingId].floors[0]; }
+  const building = BUILDINGS[state.buildingId];
+
+  const storeTabsHtml = stores.map(s => {
+    const sum = storeSummary(s);
+    const active = s.id === state.storeId ? " active" : "";
+    return '<button class="tab' + active + '" data-store="' + s.id + '">' +
+      '<div style="font-size:13px;font-weight:600;margin-bottom:4px">' + s.name + '</div>' +
+      '<div style="font-family:ui-monospace,monospace;font-size:11px;color:#8A8479">' + sum.done + '/' + sum.total + ' · ' + sum.pct + '%</div>' +
+      (s.buildingIds.length > 1 ? '<div style="font-size:11px;color:#8A8479;margin-top:2px">' + s.buildingIds.length + ' bâtiments</div>' : '') +
+      '</button>';
+  }).join("");
+
+  let buildingTabsHtml = "";
+  if (store.buildingIds.length > 1) {
+    buildingTabsHtml = '<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">' +
+      store.buildingIds.map(bid => {
+        const b = BUILDINGS[bid];
+        const active = bid === state.buildingId ? " active" : "";
+        const s = buildingSummary(b);
+        return '<button class="subtab' + active + '" data-building="' + bid + '">' + b.name + ' · ' + s.done + '/' + s.total + '</button>';
+      }).join("") + '</div>';
+  }
+
+  const chipsHtml = building.floors.map(f => {
+    const sum = floorSummary(building.id, f);
+    const active = f === state.floor ? " active" : "";
+    const badgeColor = sum.missingPhoto ? "#B5453C" : (sum.done === sum.total ? "#3C7A5A" : "#8A8479");
+    const badgeText = sum.missingPhoto ? "photo !" : (sum.done + "/" + sum.total);
+    return '<button class="chip' + active + '" data-floor="' + f + '">' +
+      '<span style="font-family:ui-monospace,monospace;font-size:13px;font-weight:600;white-space:nowrap">' + floorLabel(f) + '</span>' +
+      '<span style="font-size:11px;font-weight:600;color:' + badgeColor + '">' + badgeText + '</span>' +
+      '</button>';
+  }).join("");
+
+  const floorSum = floorSummary(building.id, state.floor);
+  const lastValidated = state.validations[floorKey(building.id, state.floor)];
+
+  const rowsHtml = WASTE_TYPES.map(w => {
+    const k = key(building.id, state.floor, w.id);
+    const rec = state.records[k];
+    const current = rec ? rec.status : null;
+
+    const statusButtons = Object.keys(STATUS).map(sid => {
+      const cfg = STATUS[sid];
+      const sel = current === sid ? " " + cfg.cls : "";
+      return '<button class="status-btn' + sel + '" data-key="' + k + '" data-status="' + sid + '">' +
+        '<span aria-hidden="true">' + cfg.icon + '</span>' + cfg.label + '</button>';
+    }).join("");
+
+    let photoBlock = "";
+    if (current === "mal") {
+      const thumb = rec.photo
+        ? '<img src="' + rec.photo + '" alt="Photo du contrôle" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid #DAD6CB" />'
+        : '<span style="font-size:12px;color:#B5453C;font-weight:600">Photo requise</span>';
+      photoBlock = '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">' + thumb +
+        '<button class="status-btn" data-photo-key="' + k + '">📷 ' +
+        (rec.photo ? "Reprendre la photo" : "Prendre une photo") + '</button></div>';
+    }
+
+    return '<div style="padding:14px 0;border-bottom:1px solid #EDEBE3">' +
+      '<div style="font-size:14px;font-weight:600;margin-bottom:8px">' + w.label + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' + statusButtons + '</div>' +
+      photoBlock +
+      '</div>';
+  }).join("");
+
+  document.getElementById("app").innerHTML =
+    '<header style="display:flex;align-items:flex-start;justify-content:space-between">' +
+    '<div><p class="eyebrow">Contrôle terrain</p><h1>Tri sélectif par palier</h1></div>' +
+    '<button id="logoutBtn" style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;background:none;border:1px solid #3A423E;border-radius:8px;padding:6px 10px;color:#F4F2EC;cursor:pointer">' +
+    '<span style="font-size:11px;color:#8FA79A">' + state.user.name + '</span>' +
+    '<span style="font-size:11px;font-weight:600">Se déconnecter</span></button>' +
+    '</header>' +
+    '<main><div id="root">' +
+    '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">' + storeTabsHtml + '</div>' +
+    buildingTabsHtml +
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">' +
+    '<p style="font-family:ui-monospace,monospace;font-size:11px;letter-spacing:0.5px;color:#8A8479;text-transform:uppercase;margin:0">' +
+    store.name + ' — ' + building.name + ' — ' + building.floors.length + ' paliers</p>' +
+    '<button data-reset style="display:flex;align-items:center;gap:4px;font-size:11px;color:#8A8479;background:none;border:none;cursor:pointer">↻ réinitialiser</button></div>' +
+    '<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px">' + chipsHtml + '</div>' +
+    '<div style="background:#FFFFFF;border:1px solid #E4E1D8;border-radius:12px;overflow:hidden">' +
+    '<div style="padding:14px 16px;border-bottom:1px solid #EDEBE3;display:flex;align-items:center;justify-content:space-between">' +
+    '<span style="font-family:ui-monospace,monospace;font-size:16px;font-weight:700">' + floorLabel(state.floor) + '</span>' +
+    '<span style="font-size:12px;color:#8A8479;font-weight:600">' + floorSum.done + '/' + floorSum.total + ' contrôlés</span>' +
+    '</div><div style="padding:0 16px">' + rowsHtml + '</div>' +
+    '<div style="padding:14px 16px;border-top:1px solid #EDEBE3">' +
+    (lastValidated ? '<p style="font-size:11px;color:#3C7A5A;font-weight:600;margin:0 0 8px">✓ Envoyé le ' + new Date(lastValidated).toLocaleString("fr-FR") + '</p>' : '') +
+    (state.submitMsg ? '<p style="font-size:12px;color:#B5453C;font-weight:600;margin:0 0 8px">' + state.submitMsg + '</p>' : '') +
+    '<button id="validateBtn" ' + (state.submitting ? "disabled" : "") + ' style="width:100%;padding:12px;border-radius:8px;border:none;background:#1C2321;color:#F4F2EC;font-size:14px;font-weight:600;cursor:pointer">' +
+    (state.submitting ? "Envoi…" : "✓ Valider et envoyer") + '</button>' +
+    '</div></div>' +
+    '</div></main>';
+
+  document.getElementById("logoutBtn").addEventListener("click", logout);
+  document.querySelectorAll("[data-store]").forEach(el => {
+    el.addEventListener("click", () => {
+      const s = stores.find(x => x.id === el.getAttribute("data-store"));
+      state.storeId = s.id;
+      state.buildingId = s.buildingIds[0];
+      state.floor = BUILDINGS[state.buildingId].floors[0];
+      state.submitMsg = "";
+      render();
+    });
+  });
+  document.querySelectorAll("[data-building]").forEach(el => {
+    el.addEventListener("click", () => {
+      state.buildingId = el.getAttribute("data-building");
+      state.floor = BUILDINGS[state.buildingId].floors[0];
+      state.submitMsg = "";
+      render();
+    });
+  });
+  document.querySelectorAll("[data-floor]").forEach(el => {
+    el.addEventListener("click", () => {
+      state.floor = parseInt(el.getAttribute("data-floor"), 10);
+      state.submitMsg = "";
+      render();
+    });
+  });
+  document.querySelectorAll("[data-key]").forEach(el => {
+    el.addEventListener("click", () => {
+      setStatus(el.getAttribute("data-key"), el.getAttribute("data-status"));
+    });
+  });
+  document.querySelectorAll("[data-photo-key]").forEach(el => {
+    el.addEventListener("click", () => triggerPhoto(el.getAttribute("data-photo-key")));
+  });
+  const validateBtn = document.getElementById("validateBtn");
+  if (validateBtn) validateBtn.addEventListener("click", () => validateFloor(building.id, state.floor));
+  const resetBtn = document.querySelector("[data-reset]");
+  if (resetBtn) resetBtn.addEventListener("click", () => {
+    if (confirm("Réinitialiser toutes les données du prototype ?")) {
+      state.records = {};
+      state.validations = {};
+      saveRecords();
+      saveValidations();
+      render();
+    }
+  });
+}
+
+loadUsers();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
